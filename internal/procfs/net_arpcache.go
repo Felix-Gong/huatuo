@@ -16,6 +16,7 @@ package procfs
 
 import (
 	"bufio"
+	"fmt"
 	"os"
 	"strconv"
 	"strings"
@@ -38,22 +39,61 @@ func NetArpCache() (*ArpCacheStats, error) {
 	defer file.Close()
 
 	scanner := bufio.NewScanner(file)
-	scanner.Scan()
-
-	// First string is always a header for stats
-	var headers []string
-	headers = append(headers, strings.Fields(scanner.Text())...)
-
-	// Fast path ...
-	cache := &ArpCacheStats{Stats: make(map[string]uint64)}
-
-	scanner.Scan()
-	for num, counter := range strings.Fields(scanner.Text()) {
-		value, err := strconv.ParseUint(counter, 16, 64)
-		if err != nil {
+	if !scanner.Scan() {
+		if err := scanner.Err(); err != nil {
 			return nil, err
 		}
-		cache.Stats[headers[num]] = value
+		return &ArpCacheStats{Stats: map[string]uint64{}}, nil
+	}
+
+	// First string is always a header for stats
+	headers := strings.Fields(scanner.Text())
+	if len(headers) == 0 {
+		if err := scanner.Err(); err != nil {
+			return nil, err
+		}
+		return &ArpCacheStats{Stats: map[string]uint64{}}, nil
+	}
+
+	cache := &ArpCacheStats{Stats: make(map[string]uint64)}
+
+	if !scanner.Scan() {
+		if err := scanner.Err(); err != nil {
+			return nil, err
+		}
+		return cache, nil
+	}
+
+	for {
+		fields := strings.Fields(scanner.Text())
+		if len(fields) == 0 {
+			if !scanner.Scan() {
+				break
+			}
+			continue
+		}
+		if len(fields) > len(headers) {
+			return nil, fmt.Errorf("more arp_cache counters (%d) than headers (%d)", len(fields), len(headers))
+		}
+		for num, counter := range fields {
+			value, err := strconv.ParseUint(counter, 16, 64)
+			if err != nil {
+				return nil, err
+			}
+			cache.Stats[headers[num]] += value
+		}
+		if len(fields) < len(headers) {
+			if !scanner.Scan() {
+				break
+			}
+			continue
+		}
+		if !scanner.Scan() {
+			break
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, err
 	}
 
 	return cache, nil
